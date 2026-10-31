@@ -131,7 +131,7 @@ void *bbCreate(obs_data_t *settings, obs_source_t *source)
 	f->engine.setParams(paramsFromSettings(settings));
 	f->engine.snapToTargets();
 
-	obs_log(LOG_INFO, "filter created on '%s' (%u Hz, %zu ch)", obs_source_get_name(source), f->sampleRate,
+	obs_log(LOG_INFO, "filter '%s' created (%u Hz, %zu ch)", obs_source_get_name(source), f->sampleRate,
 		f->channels);
 	return f;
 }

@@ -1,5 +1,12 @@
 # Bass Booster — OBS Audio Filter Plugin: Implementation Plan
 
+> **Status: implemented.** The finished plugin is in [`obs-bass-booster/`](obs-bass-booster/README.md).
+> Where the build differs from this plan:
+> - The limiter runs *after* Mix and Output Gain. Being the last gain stage is what lets it guarantee the ceiling.
+> - "Harmonic synth" became **Harmonic Restoration**. A full-wave rectifier rebuilds the missing fundamental from the difference tones of the surviving harmonics, and Drive adds odd harmonics on top.
+> - Both generators run on the mono sum and feed every channel, which keeps the bass phase-coherent.
+> - The end-to-end test loads the real module into libobs, rather than relying on manual testing alone.
+
 **Goal:** an adjustable OBS Studio audio filter that shows up under
 *Audio Mixer → (source) ⋮ → Filters → + → "Bass Booster"* and puts bass back into
 an input that currently has none.

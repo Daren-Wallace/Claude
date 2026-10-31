@@ -1,0 +1,195 @@
+name: Bass Booster for OBS
+
+on:
+  push:
+    paths:
+      - 'obs-bass-booster/**'
+      - '.github/workflows/obs-bass-booster.yml'
+    tags:
+      - 'obs-bass-booster-v*'
+  pull_request:
+    paths:
+      - 'obs-bass-booster/**'
+      - '.github/workflows/obs-bass-booster.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: obs-bass-booster
+
+jobs:
+  format:
+    name: Check formatting
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: clang-format
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang-format-18
+          find src tests tools \( -name '*.c' -o -name '*.cpp' -o -name '*.h' -o -name '*.hpp' \) -print0 \
+            | xargs -0 clang-format-18 --dry-run --Werror
+
+  linux:
+    name: Linux (build, unit + libobs end-to-end tests, package)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libobs-dev ninja-build xvfb
+      - name: Configure
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DCMAKE_INSTALL_PREFIX=/usr
+          -DCMAKE_INSTALL_LIBDIR=lib/x86_64-linux-gnu
+          -DCMAKE_COMPILE_WARNING_AS_ERROR=ON
+          -DBASS_BOOSTER_ENABLE_TESTS=ON
+      - name: Build
+        run: cmake --build build --parallel
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+      - name: Render demo audio
+        run: |
+          R=build/tools/bass-booster-render
+          $R --generate phone-voice build/phone-voice.wav
+          $R --preset restore build/phone-voice.wav build/phone-voice-restored.wav | tee build/restore-report.txt
+      - name: Package
+        run: |
+          set -euo pipefail
+          version="$(jq -r .version buildspec.json)"
+          (cd build && cpack -G DEB)
+          # Portable layout for ~/.config/obs-studio/plugins (also used by Flatpak OBS).
+          stage="build/portable/obs-bass-booster"
+          mkdir -p "$stage/bin/64bit" "$stage/data"
+          cp build/obs-bass-booster.so "$stage/bin/64bit/"
+          cp -r data/. "$stage/data/"
+          tar -C build/portable -cJf "release/obs-bass-booster-${version}-linux-x86_64.tar.xz" obs-bass-booster
+          ls -la release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: obs-bass-booster-linux-x86_64
+          path: |
+            obs-bass-booster/release/*.deb
+            obs-bass-booster/release/*.tar.xz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: demo-audio
+          path: |
+            obs-bass-booster/build/phone-voice.wav
+            obs-bass-booster/build/phone-voice-restored.wav
+            obs-bass-booster/build/restore-report.txt
+
+  sanitizers:
+    name: Linux (AddressSanitizer + UBSan)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libobs-dev ninja-build xvfb
+      - name: Configure
+        run: >
+          cmake -S . -B build-asan -G Ninja
+          -DCMAKE_BUILD_TYPE=Debug
+          -DBASS_BOOSTER_ENABLE_TESTS=ON
+          "-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all"
+          "-DCMAKE_C_FLAGS=-fsanitize=address,undefined"
+          "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined"
+          "-DCMAKE_MODULE_LINKER_FLAGS=-fsanitize=address,undefined"
+      - name: Build
+        run: cmake --build build-asan --parallel
+      - name: Test
+        run: ctest --test-dir build-asan --output-on-failure -E benchmark
+
+  windows:
+    name: Windows x64 (build, unit tests, package)
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        shell: pwsh
+        run: cmake --preset windows-ci-x64 -DBASS_BOOSTER_ENABLE_TESTS=ON
+      - name: Build
+        shell: pwsh
+        run: cmake --build --preset windows-ci-x64 --parallel
+      - name: Test
+        shell: pwsh
+        run: ctest --test-dir build_x64 -C RelWithDebInfo --output-on-failure -L unit
+      - name: Package
+        shell: pwsh
+        run: |
+          $version = (Get-Content buildspec.json | ConvertFrom-Json).version
+          cmake --install build_x64 --config RelWithDebInfo --prefix release/stage
+          New-Item -ItemType Directory -Force -Path release | Out-Null
+          Compress-Archive -Path release/stage/* -DestinationPath "release/obs-bass-booster-$version-windows-x64.zip" -Force
+          Get-ChildItem -Recurse release/stage | Select-Object FullName
+      - uses: actions/upload-artifact@v4
+        with:
+          name: obs-bass-booster-windows-x64
+          path: obs-bass-booster/release/*.zip
+
+  macos:
+    name: macOS Universal (build, unit tests, package)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake --preset macos-ci -DBASS_BOOSTER_ENABLE_TESTS=ON
+        env:
+          CODESIGN_IDENT: '-'
+      - name: Build
+        run: cmake --build --preset macos-ci --parallel
+      - name: Test
+        run: ctest --test-dir build_macos -C RelWithDebInfo --output-on-failure -L unit
+      - name: Package
+        run: |
+          set -euo pipefail
+          version="$(jq -r .version buildspec.json)"
+          mkdir -p release
+          bundle="build_macos/RelWithDebInfo/obs-bass-booster.plugin"
+          lipo -info "$bundle/Contents/MacOS/obs-bass-booster"
+          ditto -c -k --keepParent "$bundle" "release/obs-bass-booster-${version}-macos-universal.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: obs-bass-booster-macos-universal
+          path: obs-bass-booster/release/*.zip
+
+  release:
+    name: Draft GitHub release
+    if: startsWith(github.ref, 'refs/tags/obs-bass-booster-v')
+    needs: [format, linux, sanitizers, windows, macos]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Checksums
+        run: |
+          find artifacts -type f \( -name '*.zip' -o -name '*.deb' -o -name '*.tar.xz' \) -exec mv {} . \;
+          sha256sum *.zip *.deb *.tar.xz > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+      - uses: softprops/action-gh-release@9d7c94cfd0a1f3ed45544c887983e9fa900f0564
+        with:
+          draft: true
+          name: Bass Booster for OBS ${{ github.ref_name }}
+          files: |
+            *.zip
+            *.deb
+            *.tar.xz
+            SHA256SUMS.txt
