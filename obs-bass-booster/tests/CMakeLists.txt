@@ -21,6 +21,11 @@ if(NOT Catch2_FOUND)
       target_compile_options(${_catch_target} PRIVATE $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-w>)
     endif()
   endforeach()
+  # The plugin template defines UNICODE/_UNICODE globally on Windows, which
+  # makes Catch2 emit wmain() instead of main(). Keep a plain console main().
+  if(TARGET Catch2WithMain)
+    target_compile_definitions(Catch2WithMain PRIVATE DO_NOT_USE_WMAIN)
+  endif()
   list(APPEND CMAKE_MODULE_PATH "${catch2_SOURCE_DIR}/extras")
 endif()
 include(Catch)

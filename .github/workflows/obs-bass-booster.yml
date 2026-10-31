@@ -27,25 +27,33 @@ defaults:
 jobs:
   format:
     name: Check formatting
+    timeout-minutes: 45
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - name: clang-format
+        timeout-minutes: 5
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq clang-format-18
+          # clang-format-18 ships preinstalled on the ubuntu-24.04 runner image.
+          command -v clang-format-18 || { sudo apt-get update -qq && sudo apt-get install -y -qq clang-format-18; }
           find src tests tools \( -name '*.c' -o -name '*.cpp' -o -name '*.h' -o -name '*.hpp' \) -print0 \
             | xargs -0 clang-format-18 --dry-run --Werror
 
   linux:
     name: Linux (build, unit + libobs end-to-end tests, package)
+    timeout-minutes: 45
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - name: Install dependencies
+        timeout-minutes: 10
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq libobs-dev ninja-build xvfb
+          for attempt in 1 2 3; do
+            sudo timeout 240 apt-get update -qq &&
+              sudo timeout 300 apt-get install -y -qq libobs-dev ninja-build xvfb && break
+            echo "apt attempt $attempt failed, retrying"; sleep 10
+          done
+          dpkg -s libobs-dev ninja-build xvfb > /dev/null
       - name: Configure
         run: >
           cmake -S . -B build -G Ninja
@@ -91,13 +99,19 @@ jobs:
 
   sanitizers:
     name: Linux (AddressSanitizer + UBSan)
+    timeout-minutes: 45
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - name: Install dependencies
+        timeout-minutes: 10
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq libobs-dev ninja-build xvfb
+          for attempt in 1 2 3; do
+            sudo timeout 240 apt-get update -qq &&
+              sudo timeout 300 apt-get install -y -qq libobs-dev ninja-build xvfb && break
+            echo "apt attempt $attempt failed, retrying"; sleep 10
+          done
+          dpkg -s libobs-dev ninja-build xvfb > /dev/null
       - name: Configure
         run: >
           cmake -S . -B build-asan -G Ninja
@@ -114,6 +128,7 @@ jobs:
 
   windows:
     name: Windows x64 (build, unit tests, package)
+    timeout-minutes: 45
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
@@ -141,6 +156,7 @@ jobs:
 
   macos:
     name: macOS Universal (build, unit tests, package)
+    timeout-minutes: 45
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
