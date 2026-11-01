@@ -454,5 +454,5 @@ TEST_CASE("CPU cost is a small fraction of real time", "[engine][benchmark]")
 	const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
 	const double percent = 100.0 * elapsed / seconds;
 	WARN("Stereo 48 kHz, every stage active: " << percent << " % of one core");
-	CHECK(percent < 15.0); // generous for slow CI runners; ~3-4 % on a desktop core
+	CHECK(percent < 15.0); // generous for slow CI runners; ~4 % on a desktop core
 }

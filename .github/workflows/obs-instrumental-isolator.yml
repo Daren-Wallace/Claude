@@ -1,0 +1,212 @@
+name: Instrumental Isolator for OBS
+
+on:
+  push:
+    paths:
+      - 'obs-instrumental-isolator/**'
+      - '.github/workflows/obs-instrumental-isolator.yml'
+    tags:
+      - 'obs-instrumental-isolator-v*'
+  pull_request:
+    paths:
+      - 'obs-instrumental-isolator/**'
+      - '.github/workflows/obs-instrumental-isolator.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: obs-instrumental-isolator
+
+jobs:
+  format:
+    name: Check formatting
+    timeout-minutes: 45
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: clang-format
+        timeout-minutes: 5
+        run: |
+          # clang-format-18 ships preinstalled on the ubuntu-24.04 runner image.
+          command -v clang-format-18 || { sudo apt-get update -qq && sudo apt-get install -y -qq clang-format-18; }
+          find src tests tools \( -name '*.c' -o -name '*.cpp' -o -name '*.h' -o -name '*.hpp' \) -print0 \
+            | xargs -0 clang-format-18 --dry-run --Werror
+
+  linux:
+    name: Linux (build, unit + libobs end-to-end tests, package)
+    timeout-minutes: 45
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        timeout-minutes: 10
+        run: |
+          for attempt in 1 2 3; do
+            sudo timeout 240 apt-get update -qq &&
+              sudo timeout 300 apt-get install -y -qq libobs-dev ninja-build xvfb && break
+            echo "apt attempt $attempt failed, retrying"; sleep 10
+          done
+          dpkg -s libobs-dev ninja-build xvfb > /dev/null
+      - name: Configure
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DCMAKE_INSTALL_PREFIX=/usr
+          -DCMAKE_INSTALL_LIBDIR=lib/x86_64-linux-gnu
+          -DCMAKE_COMPILE_WARNING_AS_ERROR=ON
+          -DISOLATOR_ENABLE_TESTS=ON
+      - name: Build
+        run: cmake --build build --parallel
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+      - name: Render demo audio and separation report
+        run: |
+          R=build/tools/isolator-render
+          $R --generate testmix build/testmix.wav
+          $R --preset karaoke build/testmix.wav build/testmix-instrumental.wav
+          $R --preset vocals build/testmix.wav build/testmix-vocals.wav
+          for p in gentle karaoke aggressive; do $R --report --preset $p; done | tee build/separation-report.txt
+      - name: Package
+        run: |
+          set -euo pipefail
+          version="$(jq -r .version buildspec.json)"
+          (cd build && cpack -G DEB)
+          # Portable layout for ~/.config/obs-studio/plugins (also used by Flatpak OBS).
+          stage="build/portable/obs-instrumental-isolator"
+          mkdir -p "$stage/bin/64bit" "$stage/data"
+          cp build/obs-instrumental-isolator.so "$stage/bin/64bit/"
+          cp -r data/. "$stage/data/"
+          tar -C build/portable -cJf "release/obs-instrumental-isolator-${version}-linux-x86_64.tar.xz" obs-instrumental-isolator
+          ls -la release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: obs-instrumental-isolator-linux-x86_64
+          path: |
+            obs-instrumental-isolator/release/*.deb
+            obs-instrumental-isolator/release/*.tar.xz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: demo-audio
+          path: |
+            obs-instrumental-isolator/build/testmix*.wav
+            obs-instrumental-isolator/build/separation-report.txt
+
+  sanitizers:
+    name: Linux (AddressSanitizer + UBSan)
+    timeout-minutes: 45
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        timeout-minutes: 10
+        run: |
+          for attempt in 1 2 3; do
+            sudo timeout 240 apt-get update -qq &&
+              sudo timeout 300 apt-get install -y -qq libobs-dev ninja-build xvfb && break
+            echo "apt attempt $attempt failed, retrying"; sleep 10
+          done
+          dpkg -s libobs-dev ninja-build xvfb > /dev/null
+      - name: Configure
+        run: >
+          cmake -S . -B build-asan -G Ninja
+          -DCMAKE_BUILD_TYPE=Debug
+          -DISOLATOR_ENABLE_TESTS=ON
+          "-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all"
+          "-DCMAKE_C_FLAGS=-fsanitize=address,undefined"
+          "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined"
+          "-DCMAKE_MODULE_LINKER_FLAGS=-fsanitize=address,undefined"
+      - name: Build
+        run: cmake --build build-asan --parallel
+      - name: Test
+        run: ctest --test-dir build-asan --output-on-failure -E benchmark
+
+  windows:
+    name: Windows x64 (build, unit tests, package)
+    timeout-minutes: 45
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        shell: pwsh
+        run: cmake --preset windows-ci-x64 -DISOLATOR_ENABLE_TESTS=ON
+      - name: Build
+        shell: pwsh
+        run: cmake --build --preset windows-ci-x64 --parallel
+      - name: Test
+        shell: pwsh
+        run: ctest --test-dir build_x64 -C RelWithDebInfo --output-on-failure -L unit
+      - name: Package
+        shell: pwsh
+        run: |
+          $version = (Get-Content buildspec.json | ConvertFrom-Json).version
+          cmake --install build_x64 --config RelWithDebInfo --prefix release/stage
+          New-Item -ItemType Directory -Force -Path release | Out-Null
+          Compress-Archive -Path release/stage/* -DestinationPath "release/obs-instrumental-isolator-$version-windows-x64.zip" -Force
+          Get-ChildItem -Recurse release/stage | Select-Object FullName
+      - uses: actions/upload-artifact@v4
+        with:
+          name: obs-instrumental-isolator-windows-x64
+          path: obs-instrumental-isolator/release/*.zip
+
+  macos:
+    name: macOS Universal (build, unit tests, package)
+    timeout-minutes: 45
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake --preset macos-ci -DISOLATOR_ENABLE_TESTS=ON
+        env:
+          CODESIGN_IDENT: '-'
+      - name: Build
+        run: cmake --build --preset macos-ci --parallel
+      - name: Test
+        run: ctest --test-dir build_macos -C RelWithDebInfo --output-on-failure -L unit
+      - name: Package
+        run: |
+          set -euo pipefail
+          version="$(jq -r .version buildspec.json)"
+          mkdir -p release
+          bundle="build_macos/RelWithDebInfo/obs-instrumental-isolator.plugin"
+          lipo -info "$bundle/Contents/MacOS/obs-instrumental-isolator"
+          ditto -c -k --keepParent "$bundle" "release/obs-instrumental-isolator-${version}-macos-universal.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: obs-instrumental-isolator-macos-universal
+          path: obs-instrumental-isolator/release/*.zip
+
+  release:
+    name: Draft GitHub release
+    if: startsWith(github.ref, 'refs/tags/obs-instrumental-isolator-v')
+    needs: [format, linux, sanitizers, windows, macos]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Checksums
+        run: |
+          find artifacts -type f \( -name '*.zip' -o -name '*.deb' -o -name '*.tar.xz' \) -exec mv {} . \;
+          sha256sum *.zip *.deb *.tar.xz > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+      - uses: softprops/action-gh-release@9d7c94cfd0a1f3ed45544c887983e9fa900f0564
+        with:
+          draft: true
+          name: Instrumental Isolator for OBS ${{ github.ref_name }}
+          files: |
+            *.zip
+            *.deb
+            *.tar.xz
+            SHA256SUMS.txt

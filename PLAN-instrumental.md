@@ -1,5 +1,12 @@
 # Instrumental Isolator: OBS Vocal-Removal Filter (Implementation Plan)
 
+> **Status: implemented.** The finished plugin is in [`obs-instrumental-isolator/`](obs-instrumental-isolator/README.md).
+> Where the build differs from this plan:
+> - **Core engine.** Per-band centre statistics (engine A as planned) only reached −2 to −8 dB of vocal removal: instruments panned to opposite sides cancel each other's correlation inside a band. The core is now a 256-tap **adaptive side predictor** (NLMS) at about 190 Hz resolution, which reaches **−20 dB** with instruments within 1.5 dB. The filterbank is now 2/3-octave and handles ambience and bass/treble protection.
+> - **No shared `common-dsp` library.** Each plugin stays a self-contained obs-plugintemplate project that builds from its own folder, so the small shared headers are copied instead.
+> - **No Mix control.** It duplicated Strength; Strength above 50 % now over-subtracts.
+> - **CPU** is about 4 % of one core rather than under 3 %. Most of it is the predictor, which is what delivers the separation.
+
 **Goal:** an OBS audio filter that removes vocals in real time and leaves the instrumental, with **zero added latency**. Separation does not need to be perfect.
 
 ---

@@ -54,7 +54,7 @@ catch_discover_tests(isolator-tests DISCOVERY_MODE PRE_TEST PROPERTIES LABELS "u
 # audio through an OBS source with the filter attached and verify the result.
 if(TARGET ${CMAKE_PROJECT_NAME} AND (OS_LINUX OR CMAKE_SYSTEM_NAME STREQUAL "Linux"))
   add_executable(isolator-obs-integration obs_integration_test.cpp)
-  target_link_libraries(isolator-obs-integration PRIVATE OBS::libobs isolator-dsp)
+  target_link_libraries(isolator-obs-integration PRIVATE OBS::libobs isolator-dsp isolator-wav)
   target_compile_definitions(
     isolator-obs-integration
     PRIVATE
