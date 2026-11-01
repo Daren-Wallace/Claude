@@ -125,7 +125,7 @@ jobs:
       - name: Build
         run: cmake --build build-asan --parallel
       - name: Test
-        run: ctest --test-dir build-asan --output-on-failure -E benchmark
+        run: ctest --test-dir build-asan --output-on-failure -E "CPU cost"  # timing is meaningless under sanitizers
 
   windows:
     name: Windows x64 (build, unit tests, package)
